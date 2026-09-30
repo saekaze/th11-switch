@@ -1,0 +1,432 @@
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/AnmVm.hpp b/game/AnmVm.hpp
+--- a/game/AnmVm.hpp
++++ b/game/AnmVm.hpp
+@@ -38,12 +38,12 @@
+     u32 flags,flags2,reserved_40c;
+     void (*before_update)(AnmVm&);
+     void (*draw_callback)(AnmVm&);
+-    u32 reserved_418;
++    ptr_word reserved_418;
+     u8 rectangle_columns,rectangle_rows;u16 reserved_41e;
+     u32 reserved_420[2];
+     int (*after_update)(AnmVm&);
+     i32 (*sprite_callback)(AnmVm&,i32);
+-    u32 reserved_430;
++    ptr_word reserved_430;
+     void initialize() noexcept;
+     bool bind_sprite(i32 index) noexcept;
+     bool bind_script(AnmResource& file,i32 script,u16 file_id,const float* rate) noexcept;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/BombController.cpp b/game/BombController.cpp
+--- a/game/BombController.cpp
++++ b/game/BombController.cpp
+@@ -31,7 +31,7 @@
+     }else if(selection==1){if(!sound(49)||!create(state.animation,33,true)||!fail_spell()){last_error=-4;return -2;}}
+     else if(selection==2){
+         if(!sound(49)||!create(state.animation,37,true)||!create_distortion()||!fail_spell()){last_error=-4;return -2;}
+-        auto* vm=animations.find(state.animation);vm->after_update=ring_noise;vm->reserved_418=u32(reinterpret_cast<uintptr_t>(this));
++        auto* vm=animations.find(state.animation);vm->after_update=ring_noise;vm->reserved_418=ptr_word(this);
+     }
+     else if(selection==3){
+         state.position.y=float(double(state.position.y)-32);
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/BulletManager.cpp b/game/BulletManager.cpp
+--- a/game/BulletManager.cpp
++++ b/game/BulletManager.cpp
+@@ -25,7 +25,7 @@
+     const auto& a=bullet_appearances[type];if(a.effect_mode==1&&color>=8)return false;
+     b.sprite=i16(type);b.color=i16(color);b.hitbox={a.hitbox,a.hitbox};
+     if(!b.vm.bind_script(resource,a.script,file_id,&animations.rate))return false;
+-    b.vm.sprite_callback=sprite_callback;b.vm.reserved_430=u32(uintptr_t(&b));
++    b.vm.sprite_callback=sprite_callback;b.vm.reserved_430=ptr_word(&b);
+     // Original bind executes the first animation frame before the spawn interrupt.
+     if(b.vm.update(animations)<0)return false;
+     b.flags&=~0x10u;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/EclContext.hpp b/game/EclContext.hpp
+--- a/game/EclContext.hpp
++++ b/game/EclContext.hpp
+@@ -34,8 +34,8 @@
+     float* float_reference(u32,EclGlobals&);
+     i32 update(float elapsed,EclServices&);
+ };
+-static_assert(offsetof(EclContext,owner)==0x1014);
+-static_assert(sizeof(EclContext)==0x1024);
++TH_LAYOUT_ASSERT(offsetof(EclContext,owner)==0x1014);
++TH_LAYOUT_ASSERT(sizeof(EclContext)==0x1024);
+ inline float float_bits(u32 v)noexcept{float f;std::memcpy(&f,&v,4);return f;}
+ inline u32 float_bits(float v)noexcept{u32 b;std::memcpy(&b,&v,4);return b;}
+ }
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/EclInterpreter.cpp b/game/EclInterpreter.cpp
+--- a/game/EclInterpreter.cpp
++++ b/game/EclInterpreter.cpp
+@@ -17,7 +17,8 @@
+ void push_integer(EclStack& s,i32 v){s.push(EclValueType::Integer,u32(v));}
+ void push_float(EclStack& s,float v){s.push(EclValueType::Float,float_bits(v));}
+ template<class T>T& destination(T* p){if(!p)__builtin_trap();return *p;}
+-const EclInstruction* advance(const EclInstruction* p,u32 n){return reinterpret_cast<const EclInstruction*>(reinterpret_cast<const u8*>(p)+n);}
++// Switch port: offsets are signed (backward jumps); a u32 wraps only on 32-bit targets.
++const EclInstruction* advance(const EclInstruction* p,i32 n){return reinterpret_cast<const EclInstruction*>(reinterpret_cast<const u8*>(p)+n);}
+ float normalize(float value){constexpr double pi=3.1415927410125732421875,tau=6.283185482025146484375;u32 loops=0;while(value>pi){value=float(double(value)-tau);if(loops++>32)break;}while(value<-pi){value=float(double(value)+tau);if(loops++>32)break;}return value;}
+ void diagnostic(EclContext& context,EclServices& services){
+     const char* cursor=reinterpret_cast<const char*>(context.instruction)+20;u32 index=1,descriptor=0;
+@@ -44,9 +45,9 @@
+             switch(op){
+             case Op::Nop:break;
+             case Op::Delete:instruction=nullptr;return -1;
+-            case Op::Return:{stack.leave_frame();if(!stack.top){instruction=nullptr;return -1;}u32 b;if(stack.pop_raw(b))instruction=reinterpret_cast<const EclInstruction*>(uintptr_t(b));if(stack.pop_raw(b))time=float_bits(b);if(!instruction)return -1;break;}
++            case Op::Return:{stack.leave_frame();if(!stack.top){instruction=nullptr;return -1;}u32 b;if(stack.pop_raw(b))instruction=static_cast<const EclInstruction*>(pointer_from_handle(b));if(stack.pop_raw(b))time=float_bits(b);if(!instruction)return -1;break;}
+             case Op::Call:if(call_subroutine(*this,*this,0,services))return -1;continue;
+-            case Op::Jump:case Op::JumpIfZero:case Op::JumpIfNonzero:{const bool jump=op==Op::Jump?true:(pop_integer(stack)==0)==(op==Op::JumpIfZero);if(jump){time=float(instruction->argument<i32>(1));instruction=advance(instruction,instruction->argument());continue;}break;}
++            case Op::Jump:case Op::JumpIfZero:case Op::JumpIfNonzero:{const bool jump=op==Op::Jump?true:(pop_integer(stack)==0)==(op==Op::JumpIfZero);if(jump){time=float(instruction->argument<i32>(1));instruction=advance(instruction,instruction->argument<i32>());continue;}break;}
+             case Op::Spawn:owner->spawn_thread(-1,0,services);break;
+             case Op::SpawnNamed:{i32 id=instruction->argument<i32>((instruction->argument()+4)/4);if(instruction->references&2)id=resolve_integer(id,services);owner->spawn_thread(id,1,services);break;}
+             case Op::CancelThread:case Op::SetThreadFlag:case Op::ClearThreadFlag:case Op::SetThreadState:{auto* node=owner->find_thread(integer_argument(0,services));if(node){auto& c=*node->value;if(op==Op::CancelThread)c.instruction=nullptr;if(op==Op::SetThreadFlag)c.flags|=1;if(op==Op::ClearThreadFlag)c.flags&=~1u;if(op==Op::SetThreadState)c.state=u32(integer_argument(1,services));}break;}
+@@ -87,7 +88,7 @@
+             default:{const i32 result=services.command(*this);if(result==-1)return 0;if(result==-2)return -2;break;}
+             }
+         }
+-        instruction=advance(instruction,instruction->length);
++        instruction=advance(instruction,i32(instruction->length));
+     }
+     time=float(double(time)+elapsed);return 0;
+ }
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/EclOwner.cpp b/game/EclOwner.cpp
+--- a/game/EclOwner.cpp
++++ b/game/EclOwner.cpp
+@@ -26,7 +26,7 @@
+         u32 saved=0;target.stack.pop_raw(saved);target.stack.top=old_top;
+         std::memcpy(target.stack.data+old_top-4,&saved,4);
+         target.stack.push(EclValueType::Untyped,float_bits(source.time));
+-        target.stack.push(EclValueType::Untyped,u32(reinterpret_cast<uintptr_t>(source.instruction)));
++        target.stack.push(EclValueType::Untyped,pointer_handle(source.instruction));
+     }
+     auto* owner=source.owner;auto* previous=owner->active;owner->active=&target;
+     target.instruction=owner->program->find(reinterpret_cast<const char*>(source.instruction)+20);target.time=0;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/EclOwner.hpp b/game/EclOwner.hpp
+--- a/game/EclOwner.hpp
++++ b/game/EclOwner.hpp
+@@ -20,7 +20,7 @@
+     void reset_threads(EclServices&);
+     void select_subroutine(const char*)noexcept;
+ };
+-static_assert(offsetof(EclOwner,program)==0x102c);
+-static_assert(offsetof(EclOwner,threads)==0x1030);
++TH_LAYOUT_ASSERT(offsetof(EclOwner,program)==0x102c);
++TH_LAYOUT_ASSERT(offsetof(EclOwner,threads)==0x1030);
+ i32 call_subroutine(EclContext& target,EclContext& source,u32 skipped,EclServices&);
+ }
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/EnemyState.hpp b/game/EnemyState.hpp
+--- a/game/EnemyState.hpp
++++ b/game/EnemyState.hpp
+@@ -49,20 +49,20 @@
+     const char* check_interrupts(EnemyPhaseState&)noexcept;
+ };
+ struct Enemy {EclOwner script;EnemyState state;};
+-static_assert(offsetof(Enemy,state)==0x103c);
++TH_LAYOUT_ASSERT(offsetof(Enemy,state)==0x103c);
+ static_assert(offsetof(EnemyState,integers)==0x124);
+-static_assert(offsetof(EnemyState,lifetime)==0x154);
+-static_assert(offsetof(EnemyState,absolute_position)==0x174);
+-static_assert(offsetof(EnemyState,absolute_angle)==0x20c);
+-static_assert(offsetof(EnemyState,emitters)==0x374);
+-static_assert(offsetof(EnemyState,emitter_offset)==0x1414);
+-static_assert(offsetof(EnemyState,emitter_origin)==0x1474);
+-static_assert(offsetof(EnemyState,visual_size)==0x14d4);
+-static_assert(offsetof(EnemyState,health)==0x14f0);
+-static_assert(offsetof(EnemyState,flags)==0x1580);
+-static_assert(offsetof(EnemyState,script_owner)==0x1614);
+-static_assert(sizeof(EnemyState)==0x163c);
+-static_assert(sizeof(Enemy)==0x2678);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,lifetime)==0x154);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,absolute_position)==0x174);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,absolute_angle)==0x20c);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,emitters)==0x374);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,emitter_offset)==0x1414);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,emitter_origin)==0x1474);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,visual_size)==0x14d4);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,health)==0x14f0);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,flags)==0x1580);
++TH_LAYOUT_ASSERT(offsetof(EnemyState,script_owner)==0x1614);
++TH_LAYOUT_ASSERT(sizeof(EnemyState)==0x163c);
++TH_LAYOUT_ASSERT(sizeof(Enemy)==0x2678);
+ struct EnemyEnvironment {
+     Rng random;float rate=1;Vec3 player_position,camera_delta;
+     i32 rank=0,difficulty=0,character=0,subtype=0,shared_integers[3]{},enemy_count=0;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/ItemManager.hpp b/game/ItemManager.hpp
+--- a/game/ItemManager.hpp
++++ b/game/ItemManager.hpp
+@@ -9,8 +9,8 @@
+     AnmVm vm;Vec3 position,velocity;float reserved_44c;
+     Timer lifetime;i32 state,type,display_type;float attraction_speed;i32 delay;
+ };
+-static_assert(sizeof(ItemState)==0x478);
+-static_assert(offsetof(ItemState,state)==0x464);
++TH_LAYOUT_ASSERT(sizeof(ItemState)==0x478);
++TH_LAYOUT_ASSERT(offsetof(ItemState,state)==0x464);
+ struct ItemBounds {float left=1,top=1,right=-1,bottom=-1;bool contains(Vec3 p)const noexcept{return left<=p.x&&top<=p.y&&p.x<=right&&p.y<=bottom;}};
+ struct ItemPlayer {
+     Vec3 position{0,400,0};i32 state=1;float attraction_speed=8;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/LaserInfinite.cpp b/game/LaserInfinite.cpp
+--- a/game/LaserInfinite.cpp
++++ b/game/LaserInfinite.cpp
+@@ -15,7 +15,7 @@
+     auto& b=l.base;l.parameters=parameters;b.state=3;b.type=1;b.sprite=parameters.sprite;b.color=parameters.color;
+     if(u32(b.sprite)>=bullet_appearances.size()||b.color<0||b.color>=16)return false;
+     auto& body=l.body;if(!body.bind_script(resource,bullet_appearances[b.sprite].script,file_id,&animations.rate))return false;
+-    body.sprite_callback=sprite_callback;body.reserved_430=u32(uintptr_t(&l));
++    body.sprite_callback=sprite_callback;body.reserved_430=ptr_word(&l);
+     if(body.update(animations)<0)return false;body.pending_interrupt=2;if(body.update(animations)<0)return false;
+     if(parameters.flags&2)body.flags=(body.flags&0xffffff9f)|0x10;
+     body.flags=(body.flags&0xfc63ffff)|0x600000;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/LaserLine.cpp b/game/LaserLine.cpp
+--- a/game/LaserLine.cpp
++++ b/game/LaserLine.cpp
+@@ -16,7 +16,7 @@
+     if(u32(b.sprite)>=bullet_appearances.size()||b.color<0||b.color>=16)return false;
+     auto& body=l.body;
+     if(!body.bind_script(resource,bullet_appearances[b.sprite].script,file_id,&animations.rate))return false;
+-    body.sprite_callback=sprite_callback;body.reserved_430=u32(uintptr_t(&l));
++    body.sprite_callback=sprite_callback;body.reserved_430=ptr_word(&l);
+     if(body.update(animations)<0)return false;body.pending_interrupt=2;if(body.update(animations)<0)return false;
+     if(parameters.flags&1)body.flags=(body.flags&0xffffff9f)|0x10;
+     body.flags=(body.flags&0xfc63ffff)|0x600000;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/PointerHandles.cpp b/game/PointerHandles.cpp
+--- a/game/PointerHandles.cpp
++++ b/game/PointerHandles.cpp
+@@ -0,0 +1,24 @@
++// Switch port addition: see pointer_handle in Types.hpp.
++#include "Types.hpp"
++#include <unordered_map>
++#include <vector>
++namespace th11 {
++#if UINTPTR_MAX==0xffffffffu
++u32 pointer_handle(const void* p) noexcept {return u32(reinterpret_cast<std::uintptr_t>(p));}
++const void* pointer_from_handle(u32 h) noexcept {return reinterpret_cast<const void*>(std::uintptr_t(h));}
++#else
++namespace {
++// Handles are only ever minted for ECL return addresses: instruction
++// pointers inside loaded ECL files, so the table stays small. Handle 0 is
++// nullptr, like the original's zero word.
++std::unordered_map<const void*,u32> handles;
++std::vector<const void*> pointers{nullptr};
++}
++u32 pointer_handle(const void* p) noexcept {
++    if(!p)return 0;
++    const auto found=handles.find(p);if(found!=handles.end())return found->second;
++    const u32 handle=u32(pointers.size());pointers.push_back(p);handles.emplace(p,handle);return handle;
++}
++const void* pointer_from_handle(u32 h) noexcept {return h<pointers.size()?pointers[h]:nullptr;}
++#endif
++}
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/ScorePopups.hpp b/game/ScorePopups.hpp
+--- a/game/ScorePopups.hpp
++++ b/game/ScorePopups.hpp
+@@ -7,7 +7,7 @@
+     u8 digits[12]{};Vec3 position;u32 color=0;
+     Timer age{0,0,0,nullptr,0};u32 reserved30=0,reserved34=0;u8 active=0,length=0,reserved3a[6]{};
+ };
+-static_assert(sizeof(ScorePopup)==0x40);
++TH_LAYOUT_ASSERT(sizeof(ScorePopup)==0x40);
+ struct ScoreGlyph {i32 sprite;float x,y;u32 color;};
+ // Original score effects 438440/438020/4380d0. Ten rotating slots;
+ // the native update and draw iterate all thirteen reserved slots.
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/ScreenDeformation.cpp b/game/ScreenDeformation.cpp
+--- a/game/ScreenDeformation.cpp
++++ b/game/ScreenDeformation.cpp
+@@ -13,7 +13,7 @@
+         vm->flags=(vm->flags&0xff3fffffu)|0x3000000;vm->integers[0]=rows;
+         auto* strip=static_cast<AnmVertex*>(vm->geometry);
+         for(u32 i=0;i<rows*2;++i){strip[i].position.z=0;strip[i].reciprocal_w=1;strip[i].color=0xffffffff;}
+-        vm->draw_callback=draw_callback;vm->reserved_418=u32(reinterpret_cast<uintptr_t>(this));vm->flags&=0xffffff8f;
++        vm->draw_callback=draw_callback;vm->reserved_418=ptr_word(this);vm->flags&=0xffffff8f;
+     }return true;
+ }
+ void ScreenDeformation::copy_strips(){
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/TextureImage.hpp b/game/TextureImage.hpp
+--- a/game/TextureImage.hpp
++++ b/game/TextureImage.hpp
+@@ -1,6 +1,6 @@
+ #pragma once
+ #include "AnmResource.hpp"
+-#include "../../../portable/sdl/GraphicsState.hpp"
++#include "../portable/sdl/GraphicsState.hpp"
+ namespace th11 {
+ struct TextureImage {
+     u32 width=0,height=0,pitch=0;u16 packed_format=0;
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/Types.hpp b/game/Types.hpp
+--- a/game/Types.hpp
++++ b/game/Types.hpp
+@@ -10,4 +10,18 @@
+ inline i32 signed_bits(u32 bits) noexcept {i32 result;std::memcpy(&result,&bits,4);return result;}
+ inline i32 wrapping_add(i32 a,i32 b) noexcept {return signed_bits(u32(a)+u32(b));}
+ inline i32 wrapping_sub(i32 a,i32 b) noexcept {return signed_bits(u32(a)-u32(b));}
++// Switch port (LP64). The original kept a few pointers in 32-bit slots.
++// ptr_word is the host-sized slot for back-pointers the game only stores for
++// itself; pointer_handle maps a pointer that must live in a 32-bit ECL stack
++// word to a stable 32-bit handle (identity on 32-bit targets).
++using ptr_word=std::uintptr_t;
++u32 pointer_handle(const void*) noexcept;
++const void* pointer_from_handle(u32) noexcept;
+ }
++// Byte layouts are asserted against the 32-bit original. On LP64 targets the
++// structs that hold pointers grow; nothing reads them by original offset.
++#if UINTPTR_MAX==0xffffffffu
++#define TH_LAYOUT_ASSERT(...) static_assert(__VA_ARGS__)
++#else
++#define TH_LAYOUT_ASSERT(...) static_assert(true,"")
++#endif
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/game/ZunGraphics.hpp b/game/ZunGraphics.hpp
+--- a/game/ZunGraphics.hpp
++++ b/game/ZunGraphics.hpp
+@@ -1,7 +1,7 @@
+ #pragma once
+ #include "AnmVm.hpp"
+ #include "GraphicsMath.hpp"
+-#include "../../../portable/sdl/GraphicsState.hpp"
++#include "../portable/sdl/GraphicsState.hpp"
+ namespace th11 {
+ // The game speaks in textures, matrices, blend factors and vertex layouts.
+ // This contract has no Windows device object or numeric D3D state dispatch.
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/portable/sdl/Renderer.cpp b/portable/sdl/Renderer.cpp
+--- a/portable/sdl/Renderer.cpp
++++ b/portable/sdl/Renderer.cpp
+@@ -1,17 +1,20 @@
+ #include "Renderer.hpp"
+ #include "Shaders.hpp"
+ #include "ResampleShader.hpp"
+-#include <emscripten.h>
+ #include <algorithm>
+ #include <cmath>
+ #include <cstring>
+ #include <cstdio>
+ #include <cstdlib>
+ 
+-EM_JS(int, touhou_clip_control, (), {
+-  const e=GL.currentContext.GLctx.getExtension('EXT_clip_control');
+-  if(e)e.clipControlEXT(e.LOWER_LEFT_EXT,e.ZERO_TO_ONE_EXT);return !!e;
+-});
++// Switch port: EXT_clip_control through the GLES extension loader instead
++// of WebGL. Absent -> the shader keeps the [-1,1] depth remap.
++static int touhou_clip_control(){
++ const char* list=reinterpret_cast<const char*>(glGetString(GL_EXTENSIONS));
++ if(!list||!std::strstr(list,"GL_EXT_clip_control"))return 0;
++ using ClipControl=void(*)(GLenum,GLenum);auto clip=reinterpret_cast<ClipControl>(SDL_GL_GetProcAddress("glClipControlEXT"));
++ if(!clip)return 0;clip(0x8CA1/*LOWER_LEFT*/,0x935F/*ZERO_TO_ONE*/);return glGetError()==GL_NO_ERROR;
++}
+ namespace touhou::sdl {
+ namespace {
+ Renderer* active=nullptr;
+@@ -38,12 +41,19 @@
+ State::State(){for(auto& m:matrix)m=identity;}
+ Renderer::Renderer(int v,Resolve r,void* p):version(v),resolve(r),owner(p){}
+ bool Renderer::initialize(){
+- if(!SDL_Init(SDL_INIT_VIDEO|SDL_INIT_EVENTS)){failure=SDL_GetError();return false;}
++ // Switch port: SDL2 window. Horizon gives one 1280x720 (handheld/docked)
++ // surface; desktop test builds open a resizable 960x720 window.
++ if(SDL_InitSubSystem(SDL_INIT_VIDEO|SDL_INIT_EVENTS)!=0){failure=SDL_GetError();return false;}
+  SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK,SDL_GL_CONTEXT_PROFILE_ES);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION,3);SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION,0);
++ SDL_GL_SetAttribute(SDL_GL_RED_SIZE,8);SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE,8);SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE,8);
+  SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE,0);SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE,0);SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE,0);SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER,1);
+- window=SDL_CreateWindow(version==8?"Touhou 08":"Touhou 10",640,480,SDL_WINDOW_OPENGL);if(!window){failure=SDL_GetError();return false;}
+- SDL_SetWindowSize(window,640,480);
+- context=SDL_GL_CreateContext(window);if(!context){failure=SDL_GetError();return false;}SDL_GL_SetSwapInterval(1);drawState=DrawStateCache{};
++#ifdef __SWITCH__
++ window=SDL_CreateWindow(title?title:"Touhou",SDL_WINDOWPOS_UNDEFINED,SDL_WINDOWPOS_UNDEFINED,1280,720,SDL_WINDOW_OPENGL|SDL_WINDOW_FULLSCREEN);
++#else
++ window=SDL_CreateWindow(title?title:"Touhou",SDL_WINDOWPOS_CENTERED,SDL_WINDOWPOS_CENTERED,960,720,SDL_WINDOW_OPENGL|SDL_WINDOW_RESIZABLE);
++#endif
++ if(!window){failure=SDL_GetError();return false;}
++ context=SDL_GL_CreateContext(window);if(!context){failure=SDL_GetError();return false;}SDL_GL_MakeCurrent(window,context);SDL_GL_SetSwapInterval(1);drawState=DrawStateCache{};
+  std::string source=vertexSource;if(version==10&&touhou_clip_control()){replace(source,"position.z*2.0-1.0","position.z");replace(source,"gl_Position.z=gl_Position.z*2.0-gl_Position.w;","");}
+  vertex=shader(GL_VERTEX_SHADER,source);glGenBuffers(1,&vertices.id);glGenBuffers(1,&indices.id);glGenBuffers(1,&instances.id);
+  glActiveTexture(GL_TEXTURE0);buildingGeneric=true;select(State{});generic=*program;programs.clear();buildingGeneric=false;
+@@ -60,7 +70,7 @@
+  glGenVertexArrays(1,&resampleVao);glGenTextures(1,&weightTexture);
+  warming=false;set_current(this);return true;
+ }
+-Renderer::~Renderer(){discard();for(auto& [id,g]:surfaces){glDeleteTextures(1,&g.texture);glDeleteFramebuffers(1,&g.framebuffer);}for(auto& [id,d]:depths)glDeleteRenderbuffers(1,&d.buffer);for(auto& [k,p]:programs)glDeleteProgram(p.id);glDeleteProgram(resampleProgram);glDeleteVertexArrays(1,&resampleVao);glDeleteTextures(1,&weightTexture);glDeleteProgram(generic.id);for(auto& entry:layouts)glDeleteVertexArrays(1,&entry.second);glDeleteShader(vertex);glDeleteBuffers(1,&vertices.id);glDeleteBuffers(1,&indices.id);glDeleteBuffers(1,&instances.id);if(context)SDL_GL_DestroyContext(context);if(window)SDL_DestroyWindow(window);if(active==this)active=nullptr;SDL_Quit();}
++Renderer::~Renderer(){discard();for(auto& [id,g]:surfaces){glDeleteTextures(1,&g.texture);glDeleteFramebuffers(1,&g.framebuffer);}for(auto& [id,d]:depths)glDeleteRenderbuffers(1,&d.buffer);for(auto& [k,p]:programs)glDeleteProgram(p.id);glDeleteProgram(resampleProgram);glDeleteVertexArrays(1,&resampleVao);glDeleteTextures(1,&weightTexture);glDeleteProgram(generic.id);for(auto& entry:layouts)glDeleteVertexArrays(1,&entry.second);glDeleteShader(vertex);glDeleteBuffers(1,&vertices.id);glDeleteBuffers(1,&indices.id);glDeleteBuffers(1,&instances.id);if(context)SDL_GL_DeleteContext(context);if(window)SDL_DestroyWindow(window);if(active==this)active=nullptr;}
+ void Renderer::bind_texture(GLuint id){if(boundTexture!=id){glBindTexture(GL_TEXTURE_2D,id);boundTexture=id;++stats.textureBinds;}}
+ void Renderer::bind_framebuffer(GLenum target,GLuint id){
+  const bool read=target!=GL_DRAW_FRAMEBUFFER,draw=target!=GL_READ_FRAMEBUFFER;
+@@ -224,15 +234,17 @@
+ }
+ void Renderer::release(u32 id){flush();auto d=depths.find(id);if(d!=depths.end()){glDeleteRenderbuffers(1,&d->second.buffer);depths.erase(d);}auto it=surfaces.find(id);if(it==surfaces.end())return;glDeleteTextures(1,&it->second.texture);glDeleteFramebuffers(1,&it->second.framebuffer);surfaces.erase(it);boundTexture=readFramebuffer=drawFramebuffer=~0u;}
+ void Renderer::present(u32 id){flush();pending=id;stats.frames++;if(!defer)commit();}
+-bool Renderer::commit(){if(!pending)return false;auto s=resolve(owner,pending);auto& g=surface(pending);pending=0;bind_framebuffer(GL_READ_FRAMEBUFFER,g.framebuffer);bind_framebuffer(GL_DRAW_FRAMEBUFFER,0);glDisable(GL_SCISSOR_TEST);glBlitFramebuffer(0,0,s.width,s.height,0,480,640,0,GL_COLOR_BUFFER_BIT,GL_NEAREST);SDL_GL_SwapWindow(window);stats.presentations++;return true;}
++bool Renderer::commit(){
++ if(!pending)return false;auto s=resolve(owner,pending);auto& g=surface(pending);pending=0;
++ // Switch port: aspect-correct upscale of the 640x480 frame, centred with
++ // pure black (#000000) bars - OLED friendly, same as the other ports.
++ int dw=0,dh=0;SDL_GL_GetDrawableSize(window,&dw,&dh);if(dw<=0||dh<=0){dw=640;dh=480;}
++ int pw=dw,ph=dw*3/4;if(ph>dh){ph=dh;pw=dh*4/3;}const int px=(dw-pw)/2,py=(dh-ph)/2;
++ picture={px,py,pw,ph,dw,dh};
++ bind_framebuffer(GL_DRAW_FRAMEBUFFER,0);glDisable(GL_SCISSOR_TEST);glColorMask(true,true,true,true);drawState.pipeline.colorMask=15;
++ glViewport(0,0,dw,dh);drawState.has_viewport=false;glClearColor(0,0,0,1);glClear(GL_COLOR_BUFFER_BIT);
++ bind_framebuffer(GL_READ_FRAMEBUFFER,g.framebuffer);
++ glBlitFramebuffer(0,0,s.width,s.height,px,py+ph,px+pw,py,GL_COLOR_BUFFER_BIT,pw==int(s.width)&&ph==int(s.height)?GL_NEAREST:GL_LINEAR);
++ SDL_GL_SwapWindow(window);stats.presentations++;return true;
+ }
+-extern "C" {
+-const touhou::sdl::Statistics* sdl_stats(){static touhou::sdl::Statistics zero{};return touhou::sdl::current()?&touhou::sdl::current()->stats:&zero;}
+-void sdl_defer(int enabled){if(auto* r=touhou::sdl::current())r->defer=enabled;}
+-int sdl_commit(){return touhou::sdl::current()&&touhou::sdl::current()->commit();}
+-const char* sdl_error(){return touhou::sdl::current()?touhou::sdl::current()->error():SDL_GetError();}
+-int sdl_version(){return SDL_GetVersion();}
+-double sdl_ticks(){return double(SDL_GetTicksNS())/1000000.0;}
+-__attribute__((export_name("sdl_canvas"))) void sdl_canvas(const char* selector){SDL_SetHint(SDL_HINT_EMSCRIPTEN_CANVAS_SELECTOR,selector);}
+-__attribute__((export_name("sdl_pump"))) void sdl_pump(){SDL_Event event;while(SDL_PollEvent(&event)){};}
+ }
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/portable/sdl/Renderer.hpp b/portable/sdl/Renderer.hpp
+--- a/portable/sdl/Renderer.hpp
++++ b/portable/sdl/Renderer.hpp
+@@ -1,5 +1,5 @@
+ #pragma once
+-#include <SDL3/SDL.h>
++#include <SDL.h>
+ #include "GraphicsState.hpp"
+ #include <GLES3/gl3.h>
+ #include <array>
+@@ -27,6 +27,7 @@
+     using Resolve=Surface(*)(void*,u32);
+     Statistics stats{};State state{};bool defer=false;
+     Renderer(int version,Resolve,void*);~Renderer();
++    const char* title=nullptr; // Switch port: window title
+     bool initialize();void flush();void discard();bool commit();
+     PipelineState& pipeline() override { return state.pipeline; }
+     void transform(MatrixKind,const void*);void viewport(const Viewport&);
+@@ -37,6 +38,10 @@
+     bool resample(u32,const i32*,u32,const i32*,const float*,u32,u32);
+     void read(u32);void release(u32);void present(u32);void prepare(u32);
+     const char* error()const{return failure.c_str();}
++    // Switch port: 4:3 picture rectangle inside the drawable (pillarboxed),
++    // updated on every present. Used to map touch input back to 640x480.
++    struct Picture {int x=0,y=0,width=640,height=480,drawable_width=640,drawable_height=480;} picture{};
++    SDL_Window* sdl_window()const{return window;}
+     int version;Resolve resolve;void* owner;
+ private:
+     struct GPU {GLuint texture=0,framebuffer=0;u32 version=~0u;bool rendered=false;GLuint attached=~0u;std::array<GLint,4> sampler{};};
+@@ -61,11 +66,3 @@
+ Renderer* current();void set_current(Renderer*);
+ }
+ 
+-extern "C" {
+-__attribute__((export_name("sdl_stats"))) const touhou::sdl::Statistics* sdl_stats();
+-__attribute__((export_name("sdl_defer"))) void sdl_defer(int);
+-__attribute__((export_name("sdl_commit"))) int sdl_commit();
+-__attribute__((export_name("sdl_error"))) const char* sdl_error();
+-__attribute__((export_name("sdl_version"))) int sdl_version();
+-__attribute__((export_name("sdl_ticks"))) double sdl_ticks();
+-}
+diff -ruN '--exclude=third_party' '--exclude=Fixture.cpp' '--exclude=*.mjs' '--exclude=verify.cpp' '--exclude=touch-bomb-check.cpp' a/portable/sdl/ResampleShader.hpp b/portable/sdl/ResampleShader.hpp
+--- a/portable/sdl/ResampleShader.hpp
++++ b/portable/sdl/ResampleShader.hpp
+@@ -75,8 +75,8 @@
+   }
+  }else{value=originalPixel(sourceRect.xy+at*sourceRect.zw/destinationRect.zw);}
+  uvec4 mask=uvec4(destinationMask);
+- uvec4 packed=uvec4(channel(value.r,mask.r),channel(value.g,mask.g),channel(value.b,mask.b),channel(value.a,mask.a));
+- outputColor=mix(vec4(1),vec4(packed)/max(vec4(mask),vec4(1)),greaterThan(mask,uvec4(0)));
++ uvec4 quantized=uvec4(channel(value.r,mask.r),channel(value.g,mask.g),channel(value.b,mask.b),channel(value.a,mask.a));
++ outputColor=mix(vec4(1),vec4(quantized)/max(vec4(mask),vec4(1)),greaterThan(mask,uvec4(0)));
+ }
+ )GLSL";
+ }

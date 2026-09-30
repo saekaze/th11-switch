@@ -1,0 +1,23 @@
+# --- switch port ---
+# cmake build trees
+build/
+build-*/
+# build products
+*.nro
+*.nro.sha256
+*.nacp
+*.elf
+
+# game data must never be committed
+th11.dat
+thbgm.dat
+msgothic.ttc
+msmincho.ttc
+th11.cfg
+scoreth11.dat
+th11_*.rpy
+th11_*.rpyx
+fonts/
+fontcache/
+snapshot/
+*.log
