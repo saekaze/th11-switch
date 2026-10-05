@@ -1,3 +1,4 @@
 Original game and assets: Team Shanghai Alice / ZUN.
+Game code: YomotsuHisami/th11, MIT (author-confirmed; see ../LICENSE-YomotsuHisami.txt).
 Launcher: YomotsuHisami/eagler-touhou, GPL-3.0-or-later, adapted from the local final TH08/TH10/TH09 launcher. See LICENSE-launcher.txt.
 SDL3: zlib. Emscripten: MIT / University of Illinois-NCSA.
