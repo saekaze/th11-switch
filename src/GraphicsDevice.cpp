@@ -15,7 +15,7 @@ bool GraphicsDevice::preload(AnmResource& file,bool low_color){
     std::vector<u32> handles;handles.reserve(file.textures.size());
     for(const auto& source:file.textures){Texture texture;
         if(!texture.image.load(source,low_color)){error="Unable to prepare ANM texture: "+source.name;for(const auto id:handles){backend.release(id);textures.erase(id);}return false;}
-        const auto id=next_handle++;textures.emplace(id,std::move(texture));handles.push_back(id);backend.prepare(id);
+        const auto id=next_handle++;textures.emplace(id,std::move(texture));handles.push_back(id);backend.prepare(id);if(prepared)prepared();
     }
     resources.emplace(&file,std::move(handles));return true;
 }

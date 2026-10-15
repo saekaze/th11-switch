@@ -1,5 +1,11 @@
 # Changelog — Touhou 11 Switch port
 
+
+## Unreleased (test build)
+
+* **Original loading screen:** start-up shows the original start screen (`sig.anm` script 0) with the 少女祈祷中 animation (`ascii.anm` script 6 at 480,392), built the way TH10's start-up builds it, instead of a grey bar; drawn from the player's `th11.dat`, on its own animation manager. If `th11.dat` doesn't have those scripts, the bar stays. `th11-switch.log` lists what it found and drew. Idea from シエル's PSP ports (https://github.com/kan8223-dotcom/th10-psp-native).
+* The first-launch font bake runs on another CPU core, so the screen keeps animating meanwhile.
+
 ## Touhou 11: Subterranean Animism — Switch Port r3
 
 ## What's new in r3

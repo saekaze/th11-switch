@@ -17,6 +17,7 @@ set(HOST_SOURCES
     src/BgmStream.cpp
     src/FontDevice.cpp
     src/FontBaker.cpp
+    src/LoadingScreen.cpp
     portable/sdl/Renderer.cpp
 )
 

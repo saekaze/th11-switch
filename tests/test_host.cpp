@@ -16,7 +16,10 @@
 #include "../src/FontBaker.hpp"
 #include "../src/Platform.hpp"
 #include "../portable/sdl/Renderer.hpp"
+#include "../src/LoadingScreen.hpp"
 #include <SDL.h>
+#include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -153,11 +156,59 @@ static void test_pad_defaults(){
     CHECK(keys(200,500,-500)==0); // inside the 600 deadzone
 }
 
+// One ANM v7 chunk: a w x h texture in `color`, optional sprites and scripts.
+static void anm_chunk(std::vector<u8>& anm,u16 w,u16 h,u32 color,const std::vector<std::array<float,4>>& sprites,const std::vector<std::vector<u8>>& scripts,bool last){
+    const u32 ns=u32(sprites.size()),nc=u32(scripts.size()),table_end=64+ns*4+nc*8,name=table_end,first_sprite=name+8;u32 at=first_sprite+ns*20;std::vector<u32> script_at;
+    for(const auto& code:scripts){script_at.push_back(at);at+=u32(code.size());}
+    const u32 thtx=at,bytes=u32(w)*h*4,size=thtx+16+bytes,base=u32(anm.size());anm.resize(base+size,0);u8* c=anm.data()+base;
+    const auto put=[&](u32 at,u32 v,u32 n){for(u32 i=0;i<n;++i)c[at+i]=u8(v>>(8*i));};
+    put(0,7,4);put(4,ns,2);put(6,nc,2);put(10,w,2);put(12,h,2);put(14,1,2);put(16,name,4);put(28,thtx,4);c[32]=1;put(36,last?0:size,4);std::memcpy(c+name,"tex",3);
+    for(u32 i=0;i<ns;++i){const u32 o=first_sprite+i*20;put(64+i*4,o,4);put(o,i,4);std::memcpy(c+o+4,sprites[i].data(),16);}
+    for(u32 i=0;i<nc;++i){put(64+ns*4+i*8,i,4);put(64+ns*4+i*8+4,script_at[i],4);std::memcpy(c+script_at[i],scripts[i].data(),scripts[i].size());}
+    std::memcpy(c+thtx,"THTX",4);put(thtx+6,1,2);put(thtx+8,w,2);put(thtx+10,h,2);put(thtx+12,bytes,4);
+    for(u32 i=0;i<u32(w)*h;++i)put(thtx+16+i*4,color,4);
+}
+// One ANM instruction: opcode, time, raw 32-bit arguments.
+static void anm_op(std::vector<u8>& code,i16 opcode,i16 time,std::initializer_list<u32> args={}){
+    const u32 at=u32(code.size()),length=8+u32(args.size())*4;code.resize(at+length,0);
+    const auto put=[&](u32 o,u32 v,u32 n){for(u32 i=0;i<n;++i)code[at+o+i]=u8(v>>(8*i));};put(0,u16(opcode),2);put(2,length,2);put(4,u16(time),2);u32 o=8;for(u32 a:args){put(o,a,4);o+=4;}
+}
+static u32 bits(float f){u32 v;std::memcpy(&v,&f,4);return v;}
+
+static void test_loading_screen(){
+    std::puts("loading screen (sig.anm script 0, ascii.anm script 6)");
+    sdl::GraphicsDevice graphics;if(!graphics.initialize()){std::printf("  skipped: %s\n",graphics.error.c_str());return;}
+    AnmRenderer renderer(graphics);
+    // Stand-ins: sig.anm script 0 shows a red 64x64 sprite at (320,240);
+    // ascii.anm script 6 makes script 5 (a white 32x32 sprite) as its child,
+    // as the real one makes its parts. Op 3 = sprite, 48 = position, 63 = wait, 88 = child.
+    std::vector<std::vector<u8>> sig_scripts(1);anm_op(sig_scripts[0],3,0,{0});anm_op(sig_scripts[0],48,0,{bits(320),bits(240),bits(0)});anm_op(sig_scripts[0],63,0);anm_op(sig_scripts[0],-1,0);
+    std::vector<u8> sig_bytes;anm_chunk(sig_bytes,64,64,0xffff0000,{{0,0,64,64}},sig_scripts,true);
+    std::vector<std::vector<u8>> scripts(7);for(u32 i=0;i<5;++i)anm_op(scripts[i],-1,0);
+    anm_op(scripts[5],3,0,{0});anm_op(scripts[5],63,0);anm_op(scripts[5],-1,0);
+    anm_op(scripts[6],88,0,{5});anm_op(scripts[6],63,0);anm_op(scripts[6],-1,0);
+    std::vector<u8> ascii_bytes;anm_chunk(ascii_bytes,32,32,0xffffffff,{{0,0,32,32}},scripts,true);
+    AnmResource sig,ascii;CHECK(sig.open(sig_bytes.data(),u32(sig_bytes.size())));CHECK(ascii.open(ascii_bytes.data(),u32(ascii_bytes.size())));
+    {sdl::LoadingScreen screen(graphics,renderer);CHECK(screen.start(std::move(sig),std::move(ascii)));CHECK(screen.running());
+     for(u32 i=0;i<4;++i){SDL_Delay(17);screen.pump();}
+     renderer.flush();graphics.backend.read(sdl::GraphicsDevice::screen);auto* image=graphics.pixels(sdl::GraphicsDevice::screen);CHECK(image!=nullptr);
+     if(image){auto pixel=[&](u32 x,u32 y){const auto* q=image->pixels.data()+y*image->pitch+x*4;return u32(q[2])<<16|u32(q[1])<<8|q[0];};
+        u32 l=640,r=0,t=480,b=0;for(u32 y=0;y<480;++y)for(u32 x=0;x<640;++x)if(pixel(x,y)==0xffffff){l=std::min(l,x);r=std::max(r,x);t=std::min(t,y);b=std::max(b,y);}
+        std::printf("  sig sprite %06x at 320,240; child sprite at x %u-%u, y %u-%u; corner %06x\n",pixel(320,240),l,r,t,b,pixel(5,5));
+        CHECK(pixel(320,240)==0xff0000);CHECK(pixel(300,220)==0xff0000);CHECK(pixel(5,5)==0x000000);
+        CHECK(l>=462&&l<=466&&r>=493&&r<=497&&t>=374&&t<=378&&b>=405&&b<=409);}   // 32x32 around (480,392)
+     screen.stop();CHECK(!screen.running());}
+    // Too few scripts: start() refuses, so start-up keeps the bar.
+    AnmResource few,few_sig;CHECK(few.open(sig_bytes.data(),u32(sig_bytes.size())));CHECK(few_sig.open(sig_bytes.data(),u32(sig_bytes.size())));
+    {sdl::LoadingScreen screen(graphics,renderer);CHECK(!screen.start(std::move(few_sig),std::move(few)));CHECK(!screen.running());}
+}
+
 int main(){
     const std::string dir=std::string(std::getenv("TMPDIR")?std::getenv("TMPDIR"):"/tmp")+"/th11-switch-test";
     host::make_directory(dir);
     test_pointer_handles();test_ecl_backward_jump();test_pad_defaults();test_bgm_stream(dir);test_font_baker(dir);
     if(SDL_Init(SDL_INIT_VIDEO)==0){test_renderer();SDL_Quit();}else std::printf("renderer skipped: %s\n",SDL_GetError());
+    if(SDL_Init(SDL_INIT_VIDEO)==0){test_loading_screen();SDL_Quit();}
     std::printf(failures?"FAILED (%d)\n":"all host tests passed\n",failures);
     return failures?1:0;
 }

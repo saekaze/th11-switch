@@ -10,6 +10,8 @@
 #include "AudioDevice.hpp"
 #include "FontDevice.hpp"
 #include "Platform.hpp"
+#include "LoadingScreen.hpp"
+#include "BackgroundJob.hpp"
 #include "../game/MusicCatalog.hpp"
 #include "../game/GameSession.hpp"
 #include "../game/FrameStatistics.hpp"
@@ -19,6 +21,7 @@
 #include <SDL.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -134,8 +137,10 @@ struct Application:StageResourceEffects {
     void release_animation(AnmResource& file)override{renderer.flush();renderer.invalidate();graphics.unload(file);}
     bool read_replay(const std::string& path,std::vector<u8>& bytes)override{return read_file(path,bytes,64*1024*1024);}
 
-    // Switch port: a simple bar while start-up reads th11.dat and (first
-    // launch only) bakes the text glyphs; later launches reuse fontcache/.
+    // Switch port: a simple bar while start-up reads th11.dat, then the
+    // original start-up screen (LoadingScreen) - or the bar again if th11.dat
+    // lacks it - while the text glyphs are baked (first launch only; later
+    // launches reuse fontcache/) and the title loads.
     void loading_bar(float fraction){
         static double last=-1;const double now=host::seconds();if(fraction>0&&fraction<1&&now-last<1.0/30)return;last=now;
         auto& gpu=graphics.backend;gpu.state.target=GraphicsDevice::screen;gpu.state.depth=GraphicsDevice::depth;gpu.viewport({0,0,640,480,0,1});
@@ -156,11 +161,18 @@ struct Application:StageResourceEffects {
         if(!graphics.initialize()){error=graphics.error;return false;}
         loading_bar(0);double begin=host::seconds();
         if(!read_archive()){if(error.empty())error=resources.error();return false;}
-        host::log("th11.dat read in %.1fs",host::seconds()-begin);loading_bar(.1f);
+        host::log("th11.dat read in %.1fs",host::seconds()-begin);
+        auto loading=std::make_unique<LoadingScreen>(graphics,renderer);if(!loading->start(resources))loading_bar(.1f);
+        auto* screen=loading.get();graphics.prepared=[screen]{screen->pump();};
+        struct Unhook {GraphicsDevice& g;~Unhook(){g.prepared=nullptr;}} unhook{graphics}; // never left pointing at a finished screen
         if(!audio.initialize(resources)){error=audio.error;return false;}
-        fonts.progress=[this](float f){loading_bar(.1f+.85f*f);};const bool fonts_ok=fonts.initialize();fonts.progress=nullptr;
+        // The glyph bake runs on another core while this thread keeps drawing.
+        std::atomic<float> fraction{0};std::atomic<bool> fonts_done{false};bool fonts_ok=false;fonts.progress=[&fraction](float f){fraction=f;};
+        {BackgroundJob job;job.run([&]{fonts_ok=fonts.initialize();fonts_done=true;});
+         while(!fonts_done){if(screen->running())screen->pump();else loading_bar(.1f+.85f*fraction);SDL_PumpEvents();SDL_Delay(4);}}
+        fonts.progress=nullptr;
         if(!fonts_ok){error=fonts.error;return false;}
-        loading_bar(.95f);begin=host::seconds();
+        if(!screen->running())loading_bar(.95f);begin=host::seconds();
         host::make_directory(paths().save);host::make_directory(save_path("replay"));
         if(host::exists(save_path("scoreth11.dat"))){std::vector<u8> saved;if(!read_file(save_path("scoreth11.dat"),saved,4*1024*1024)||!session.load_scores(saved.data(),u32(saved.size()))){error="Invalid scoreth11.dat: "+session.scores.error;return false;}}
         if(host::exists(save_path("th11.cfg"))){std::vector<u8> saved;if(!read_file(save_path("th11.cfg"),saved,60)||!session.config.open(saved.data(),u32(saved.size()))){error="Invalid th11.cfg";return false;}saved_config_state=saved;}
@@ -170,6 +182,7 @@ struct Application:StageResourceEffects {
         auto& core=session.resources.core;
         for(AnmResource* file:{&core.text,&core.ascii,&core.bullet,&core.enemy,&core.front,&core.title,&core.title_variant,&core.players[0],&core.players[1]})
             if(!graphics.preload(*file)){error=graphics.error;return false;}
+        graphics.prepared=nullptr;loading.reset();
         renderer.viewport={0,0,640,480,0,1};
         // GameBattle's STD owner creates backdrop VMs and publishes its camera.
         host::log("title prepared in %.1fs",host::seconds()-begin);
