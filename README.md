@@ -9,7 +9,7 @@ A native homebrew port of ZUN's 2008 bullet hell **Touhou 11: Subterranean Animi
 
 This build runs the clean C++ reimplementation from [YomotsuHisami/th11](https://github.com/YomotsuHisami/th11), compiled **natively for ARM64** (no wasm, no emulation) and driven by an SDL2 host on an OpenGL ES 3 context — no Linux, Box64 or Wine involved.
 
-Companion to the [Touhou 6](https://github.com/saekaze/th06-switch), [Touhou 7](https://github.com/saekaze/th07-switch), [Touhou 8](https://github.com/saekaze/th08-switch), [Touhou 9](https://github.com/saekaze/th09-switch) and [Touhou 10](https://github.com/saekaze/th10-switch) Switch ports, with the same `touhou11.nro` + `sd:/switch/touhou/touhou11/` layout.
+Companion to the [Touhou Switch ports](https://github.com/saekaze/touhou-switch), with the same `touhou11.nro` + `sd:/switch/touhou/touhou11/` layout.
 
 ---
 
